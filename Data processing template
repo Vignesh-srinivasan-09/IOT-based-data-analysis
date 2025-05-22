@@ -1,0 +1,258 @@
+from google.colab import drive
+drive.mount('/content/drive')
+
+!pip install -q googlemaps
+
+import googlemaps
+from datetime import datetime
+
+gmaps = googlemaps.Client(key='AIzaSyCApkjjofnVckKumnAU5qNIw2GotS2yzwQ')
+
+#Path Input for Analysis Files (Reports Folder from Drive)
+
+#@title Path Input for Analysis Files (Reports Folder from Drive)
+import os
+import glob
+from os.path import dirname
+
+# path = '/content/drive/My Drive/'
+# result = glob.glob(os.path.join(path, '*.xlsx'))
+
+# path = '/content/drive/My Drive/'
+# result = glob.glob(os.path.join(path, '*/**/***/****.xlsx'))
+
+# Path to IoT Data Files in Drive
+path = '/content/drive/My Drive/4th - 5th  july 2020' #@param {type:"string"}
+result = glob.glob(os.path.join(path, '*.csv'))
+print( result )
+
+codes = ['64902','91527','64886','72352','91394','91659'] # List with Required IMEI Code names (Last 5 Digits)
+
+lst = []
+for i in range(len(result)):
+  p = os.path.basename(result[i])
+  if p[11:16] in codes:
+    lst.append(result[i])
+  if p[18:23] in codes:
+    lst.append(result[i])
+
+#@title Enter File path of Single File for which analysis is required
+import os
+import glob
+from os.path import dirname
+
+path = '//content/drive/My Drive/0351742100291659Report2020-09-28To2020-09-29.csv'  #@param {type:"string"}
+lst = [path]
+
+# Libraries required for Analysis
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+from pathlib import Path
+import requests
+from scipy.optimize import curve_fit
+
+pd.set_option("display.max_rows", None, "display.max_columns", None)
+
+# Function to convert latitude, longitude values to distance
+def lat_long_to_distance(lat,longit,o_lat,o_longit):
+
+  dist = np.arccos(np.cos(np.radians(90-o_lat))*np.cos(np.radians(90-lat))
+  +np.sin(np.radians(90-o_lat))*np.sin(np.radians(90-lat))*np.cos(np.radians(o_longit-longit)))*6371
+
+  return dist
+
+# Function to calculate the exponential with constants a and b
+def exponential(x, a, b):
+    return a*np.exp(b*x)
+# Function to calculate the power-law with constants a and b
+def power_law(x, a, b):
+    return a*np.power(x, b)
+
+#For confidential purposes, the name of the vehicles is hidden
+# Function to convert Imei code to combination of Imei & Vehicle Number
+def Imei_Driver(imei):
+  code = imei[-5:]
+  if code == '64902':
+    name = 'XXXXX'
+  elif code == '57823':
+    name = 'XXXXX' #
+  elif code == '42403':
+    name = 'XXXXXX' #
+  elif code == '63417':
+    name = 'XXXXX' #
+  elif code == '91527':
+    name = 'XXXXX'
+  elif code == '64886':
+    name = 'XXXXX'
+  elif code == '72352':
+    name = 'XXXXXX'
+  elif code == '91659':
+    name = 'XXXXXX'
+  else:
+    name = np.NaN
+  return name
+
+from datetime import datetime
+# Function to set format for Analysis Files names
+def format_name(filename):
+  # filename = filename.replace('Report',' ')
+  filename = filename
+  name = filename.split(' ')
+  code = Imei_Driver(name[1])
+  d = name[3].split('.')
+  date = datetime.strptime(d[0], '%Y-%m-%d').strftime('%d-%m-%Y')
+  fn = code + ' - ' + date + '.csv'
+  return fn
+
+def ts_to_date(timestamp):
+  name = timestamp.split(' ')
+  date = datetime.strptime(name[0], '%Y-%m-%d').strftime('%d-%m-%Y')
+  return date
+
+def ts_to_time(timestamp):
+  name = timestamp.split(' ')
+  return name[1]
+
+def angle(x, y):
+  if y!=0:
+    angle = x/(y*5/18)
+  else:
+    angle = 0
+  return angle
+
+#@title Analysis Code (Input is Final Path where Plots, Analysis Files, Parameters are to be saved) Where Elevation_interval is multiplied by 5
+# For CSV File
+parameters = pd.DataFrame(columns=['Filename','Volt_Curve_Par_a','Volt_Curve_Par_b','Volt_Curve_Cov_a','Volt_Curve_Cov_b','Kph_Curve_Par_a','Kph_Curve_Par_b',
+                                   'Kph_Curve_Cov_a','Kph_Curve_Cov_b'])
+
+# Final Path where you want to save analysis files, visual plots, parameters file
+p = '//content/drive/My Drive/
+
+for path in lst:
+  data = pd.read_csv(path)
+  data = data[::-1]
+  data = data.reset_index(drop=True)
+  if data.shape[0] >= 10:
+    # Code Block for Distance and Cumulative Distance
+    data['Distance'] = ""
+    data.at[0,'Distance'] = 0
+    data['Cumulative_Distance'] = ""
+    data.at[0,'Cumulative_Distance'] = 0
+    for i in range(1,data.shape[0]):
+      if data.at[i,'Latitude'] == data.at[i-1,'Latitude'] and data.at[i,'Longitude'] == data.at[i-1,'Longitude']:
+        data.at[i,'Distance'] = 0
+      else:
+        data.at[i,'Distance'] = lat_long_to_distance(data.at[i,'Latitude'],data.at[i,'Longitude'],data.at[i-1,'Latitude'],data.at[i-1,'Longitude'])
+      data.at[i,'Cumulative_Distance'] = data.at[i-1,'Cumulative_Distance'] + data.at[i,'Distance']
+
+    analysis = data[data['Ignition Status']==1]
+    if analysis.size == 0:
+      continue
+    analysis = analysis[analysis['Vehicle Battery Voltage']>=47]
+    analysis.reset_index(drop=True,inplace=True)
+    analysis.drop(analysis.columns[0], axis=1, inplace=True)
+
+    group_ids = (analysis["Vehicle Battery Voltage"] > (analysis["Vehicle Battery Voltage"].shift() + 6)).cumsum()
+    grouped = analysis.groupby(group_ids).filter(lambda x: len(x) > 800).groupby(group_ids)
+    group_dict = dict(list(grouped))
+    group_dict = {i: v for i, v in enumerate(group_dict.values())}
+
+    if (len(group_dict)==0):
+      next
+
+    file_path = p + '/Analysis_Files'
+    file_dir = Path(file_path)
+    file_dir.mkdir(parents=True, exist_ok=True)
+
+    file_name = format_name(os.path.basename(path))
+
+    dist = []
+
+    for i in range(0,len(group_dict)):
+      if i == 0:
+        dist.append(0);
+      else:
+        dist.append(group_dict[i-1]['Cumulative_Distance'].iloc[-1])
+
+    for i in range(0,len(group_dict)):
+      if i!=0:
+        group_dict[i]['Cumulative_Distance'] = group_dict[i]['Cumulative_Distance'] - dist[i]
+      fn = file_name.replace('.csv','')
+      fn = fn + '-Trip ' + str(i+1) + '.xls'
+
+      subset = group_dict[i][['Latitude', 'Longitude']]
+      elevation_interval =    12#@param {type:"integer"}
+      subset = subset.iloc[::elevation_interval,:]
+      subset.reset_index(drop=True,inplace=True)
+      tuples = [tuple(x) for x in subset.to_numpy()]
+
+      n = 270
+      chunks = [tuples[i:i + n] for i in range(0, len(tuples), n)]
+
+      for j in range(0,len(chunks)):
+        if j==0:
+          response = gmaps.elevation(chunks[j])
+          df = pd.DataFrame(response)
+        else:
+          response = gmaps.elevation(chunks[j])
+          df = df.append(response, ignore_index=True)
+      df1 = pd.DataFrame({'D': df.elevation.values.repeat(elevation_interval)})
+      df1 = df1.iloc[:group_dict[i].shape[0],:]
+
+      group_dict[i].reset_index(drop=True,inplace=True)
+      group_dict[i]['Elevation'] = df1
+      group_dict[i]['Elevation_Difference'] = group_dict[i].Elevation.diff()
+      group_dict[i]['Elevation_Difference'] = group_dict[i]['Elevation_Difference'].fillna(0)
+      group_dict[i]['Angle'] = group_dict[i].apply(lambda x: angle(x['Elevation_Difference'],x['Speed']), axis=1)
+      group_dict[i]['Radians'] = group_dict[i]['Angle'].apply(lambda x: x*(3.14/180))
+      group_dict[i]['Arc'] = group_dict[i]['Radians'].apply(np.arctan)
+      group_dict[i]['Gradient'] = group_dict[i]['Arc'].apply(np.sin)
+      group_dict[i].insert(loc=1, column='Date', value=group_dict[i]['Readable Time Stamp'].apply(ts_to_date))
+      group_dict[i].insert(loc=2, column='Time', value=group_dict[i]['Readable Time Stamp'].apply(ts_to_time))
+      group_dict[i].drop('Readable Time Stamp', axis=1, inplace=True)
+      group_dict[i].to_excel(file_dir/fn,index=False)
+
+    for i in range(len(group_dict)):
+      fn = file_name.replace('.csv','')
+      fn = fn + '-Trip ' + str(i+1) + '.csv'
+      try:
+        pars, cov = curve_fit(f=exponential, xdata=group_dict[i]['Cumulative_Distance'].values.astype(float),
+                              ydata=group_dict[i]['Vehicle Battery Voltage'].values.astype(float), p0=[0, 0], bounds=(-np.inf, np.inf))
+        pars1, cov1 = curve_fit(f=exponential, xdata=group_dict[i]['Cumulative_Distance'].values.astype(float),
+                                ydata=group_dict[i]['Speed'].values.astype(float), p0=[0, 0], bounds=(-np.inf, np.inf))
+        parameters.loc[len(parameters)] = [fn.replace('.csv',''), pars[0], pars[1], cov[0], cov[1], pars1[0], pars1[1], cov1[0], cov[1]]
+      except RuntimeError:
+        continue
+
+      vis_path = p + '/Visual_Results'
+      fig_dir = Path(vis_path)
+      fig_dir.mkdir(parents=True, exist_ok=True)
+      fig_path = fn.replace('.csv','.png')
+      sfig_path = fn.replace('.csv','_Kph_Plot.png')
+
+      plt.figure(figsize=(13,8))
+      plt.xlabel('Cumulative Distance')
+      plt.ylabel('Voltage')
+      plt.title('Volt VS Cumulative Distance (Ignition: ON)')
+      plt.plot(group_dict[i]['Cumulative_Distance'],group_dict[i]['Vehicle Battery Voltage'])
+      plt.plot(group_dict[i]['Cumulative_Distance'], exponential(group_dict[i]['Cumulative_Distance'].values.astype(float), *pars), linestyle='--', linewidth=2)
+      plt.savefig(fig_dir/fig_path)
+      plt.close()
+
+      plt.figure(figsize=(13,8))
+      plt.xlabel('Cumulative Distance')
+      plt.ylabel('Speed')
+      plt.title('Kph VS Cumulative Distance (Ignition: ON)')
+      plt.plot(group_dict[i]['Cumulative_Distance'],group_dict[i]['Speed'])
+      plt.plot(group_dict[i]['Cumulative_Distance'], exponential(group_dict[i]['Cumulative_Distance'].values.astype(float), *pars1), linestyle='--', linewidth=2)
+      plt.savefig(fig_dir/sfig_path)
+      plt.close()
+
+group = parameters.sort_values('Filename')
+group = group[group['Volt_Curve_Par_a']>=47]
+group = group[group['Volt_Curve_Par_a']<=80]
+group.reset_index(drop=True,inplace=True)
+mean = group.mean()
+group.loc[len(group)] = ['Final Parameters',mean[0],mean[1],'-','-',mean[4],mean[5],'-','-']
+group.to_csv(p+'/Parameters.csv', index=False) # Path to parameters file
